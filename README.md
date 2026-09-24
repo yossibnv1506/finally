@@ -2,9 +2,13 @@
 
 A visually stunning AI-powered trading workstation that streams live market data, simulates portfolio trading, and integrates an LLM chat assistant that can analyze positions and execute trades via natural language.
 
-Built entirely by coding agents as a capstone project for an agentic AI coding course.
+Built entirely by coding agents as a capstone project for an agentic AI coding course. Full spec: [`planning/PLAN.md`](planning/PLAN.md).
 
-## Features
+## Status
+
+🚧 In progress. The **market data subsystem** (`backend/app/market/`) is complete, tested, and reviewed — see [`planning/MARKET_DATA_SUMMARY.md`](planning/MARKET_DATA_SUMMARY.md). Everything else described below (API, database, frontend, chat, Docker packaging, tests) is planned but not yet built.
+
+## Planned Features
 
 - **Live price streaming** via SSE with green/red flash animations
 - **Simulated portfolio** — $10k virtual cash, market orders, instant fills
@@ -17,25 +21,11 @@ Built entirely by coding agents as a capstone project for an agentic AI coding c
 
 Single Docker container serving everything on port 8000:
 
-- **Frontend**: Next.js (static export) with TypeScript and Tailwind CSS
-- **Backend**: FastAPI (Python/uv) with SSE streaming
-- **Database**: SQLite with lazy initialization
-- **AI**: LiteLLM → OpenRouter (Cerebras inference) with structured outputs
-- **Market data**: Built-in GBM simulator (default) or Massive API (optional)
-
-## Quick Start
-
-```bash
-# Clone and configure
-cp .env.example .env
-# Add your OPENROUTER_API_KEY to .env
-
-# Run with Docker
-docker build -t finally .
-docker run -v finally-data:/app/db -p 8000:8000 --env-file .env finally
-
-# Open http://localhost:8000
-```
+- **Frontend**: Next.js (static export) with TypeScript and Tailwind CSS — not yet built
+- **Backend**: FastAPI (Python/uv) with SSE streaming — market data done, API routes not yet built
+- **Database**: SQLite with lazy initialization — not yet built
+- **AI**: LiteLLM → OpenRouter (Cerebras inference) with structured outputs — not yet built
+- **Market data**: Built-in GBM simulator (default) or Massive API (optional) — ✅ done
 
 ## Environment Variables
 
@@ -49,13 +39,12 @@ docker run -v finally-data:/app/db -p 8000:8000 --env-file .env finally
 
 ```
 finally/
-├── frontend/    # Next.js static export
-├── backend/     # FastAPI uv project
+├── backend/     # FastAPI uv project (market data implemented; API/DB/AI pending)
 ├── planning/    # Project documentation and agent contracts
-├── test/        # Playwright E2E tests
-├── db/          # SQLite volume mount (runtime)
-└── scripts/     # Start/stop helpers
+└── db/          # SQLite volume mount (runtime, not yet used)
 ```
+
+`frontend/`, `scripts/`, and `test/` are planned per [`planning/PLAN.md`](planning/PLAN.md) but don't exist yet.
 
 ## License
 

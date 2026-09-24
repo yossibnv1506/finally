@@ -1,0 +1,15 @@
+{
+	"name": "yos-tools",
+	"owner": {
+		"name": "yossi",
+		"email": "yossibnv@gmail.com"
+	},
+	"plugins": [
+		{
+			"name": "independent-reviewer",
+			"source": "./independent-reviewer",
+			"description": "carry out an independent review of all changes, since last commit",
+			"version": "1.0.0"
+		}
+	]
+}

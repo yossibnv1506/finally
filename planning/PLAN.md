@@ -101,7 +101,6 @@ finally/
 ├── db/                       # Volume mount target (SQLite file lives here at runtime)
 │   └── .gitkeep              # Directory exists in repo; finally.db is gitignored
 ├── Dockerfile                # Multi-stage build (Node → Python)
-├── docker-compose.yml        # Optional convenience wrapper
 ├── .env                      # Environment variables (gitignored, .env.example committed)
 └── .gitignore
 ```
@@ -153,7 +152,8 @@ Both the simulator and the Massive client implement the same abstract interface.
 - Updates at ~500ms intervals
 - Correlated moves across tickers (e.g., tech stocks move together)
 - Occasional random "events" — sudden 2-5% moves on a ticker for drama
-- Starts from realistic seed prices (e.g., AAPL ~$190, GOOGL ~$175, etc.)
+- Starts from realistic seed prices (e.g., AAPL ~$190, GOOGL ~$175, etc.) for the default watchlist tickers
+- Any ticker not in the curated seed list (added later via the watchlist or the AI chat) still works: it gets default GBM parameters (moderate drift/volatility) and is grouped into a generic cross-sector correlation bucket, so the watchlist/chat can accept any ticker symbol without a rejection path
 - Runs as an in-process background task — no external dependencies
 
 ### Massive API (Optional)
@@ -171,11 +171,15 @@ Both the simulator and the Massive client implement the same abstract interface.
 - SSE streams read from this cache and push updates to connected clients
 - This architecture supports future multi-user scenarios without changes to the data layer
 
+### Tracked Ticker Universe
+
+The set of tickers the market data source tracks (and therefore the set the SSE stream can push) is the **union of the watchlist and any ticker with an open position**. Removing a ticker from the watchlist only hides it from the watchlist panel — if the user still holds shares, its price keeps updating in the cache so the positions table, portfolio heatmap, and P&L stay accurate. The backend adds/removes tickers from the market data source (`add_ticker`/`remove_ticker`) whenever the watchlist or the position set changes, not just on watchlist changes.
+
 ### SSE Streaming
 
 - Endpoint: `GET /api/stream/prices`
 - Long-lived SSE connection; client uses native `EventSource` API
-- Server pushes price updates for all tickers known to the system at a regular cadence (~500ms) — in the single-user model this is equivalent to the user's watchlist
+- Server pushes price updates for the full tracked ticker universe (watchlist ∪ open positions, see above) at a regular cadence (~500ms)
 - Each SSE event contains ticker, price, previous price, timestamp, and change direction
 - Client handles reconnection automatically (EventSource has built-in retry)
 
@@ -193,7 +197,7 @@ The backend checks for the SQLite database on startup (or first request). If the
 
 ### Schema
 
-All tables include a `user_id` column defaulting to `"default"`. This is hardcoded for now (single-user) but enables future multi-user support without schema migration.
+All tables include a `user_id` column defaulting to `"default"`. This is hardcoded for now (single-user) but enables future multi-user support without schema migration. This is deliberately speculative scaffolding — it does not imply auth or multi-user support is in scope for this build (§3 explains why SQLite/no-auth was chosen); nothing downstream should branch on `user_id` beyond the hardcoded `"default"`.
 
 **users_profile** — User state (cash balance)
 - `id` TEXT PRIMARY KEY (default: `"default"`)
@@ -290,13 +294,15 @@ There is an OPENROUTER_API_KEY in the .env file in the project root.
 When the user sends a chat message, the backend:
 
 1. Loads the user's current portfolio context (cash, positions with P&L, watchlist with live prices, total portfolio value)
-2. Loads recent conversation history from the `chat_messages` table
+2. Loads recent conversation history from the `chat_messages` table — capped at the last 20 messages (10 user/assistant turns) to bound prompt size and cost; older messages are not included
 3. Constructs a prompt with a system message, portfolio context, conversation history, and the user's new message
 4. Calls the LLM via LiteLLM → OpenRouter, requesting structured output, using the cerebras-inference skill
 5. Parses the complete structured JSON response
 6. Auto-executes any trades or watchlist changes specified in the response
 7. Stores the message and executed actions in `chat_messages`
 8. Returns the complete JSON response to the frontend (no token-by-token streaming — Cerebras inference is fast enough that a loading indicator is sufficient)
+
+If the OpenRouter call fails (network error, timeout, rate limit) or the response fails structured-output validation, the backend does not retry silently or execute partial actions. It returns a chat response with a static apology message (e.g., "Sorry, I couldn't process that — please try again."), executes no trades or watchlist changes, and still logs the user's message to `chat_messages` (with no `actions`) so the conversation history stays consistent.
 
 ### Structured Output Schema
 
@@ -315,8 +321,8 @@ The LLM is instructed to respond with JSON matching this schema:
 ```
 
 - `message` (required): The conversational text shown to the user
-- `trades` (optional): Array of trades to auto-execute. Each trade goes through the same validation as manual trades (sufficient cash for buys, sufficient shares for sells)
-- `watchlist_changes` (optional): Array of watchlist modifications
+- `trades` (optional): Array of trades to auto-execute, always expressed as a share `quantity` (fractional shares allowed). If the user asks in dollar terms ("buy $500 of AAPL"), the LLM converts that to a share quantity itself using the live price from the portfolio context before emitting the trade — the schema never carries a dollar amount. Each trade goes through the same validation as manual trades (sufficient cash for buys, sufficient shares for sells)
+- `watchlist_changes` (optional): Array of watchlist modifications. Any ticker symbol is acceptable — there is no fixed universe to validate against (see §6, "Tracked Ticker Universe")
 
 ### Auto-Execution
 
@@ -333,6 +339,7 @@ The LLM should be prompted as "FinAlly, an AI trading assistant" with instructio
 - Analyze portfolio composition, risk concentration, and P&L
 - Suggest trades with reasoning
 - Execute trades when the user asks or agrees
+- Convert dollar-amount trade requests to a share quantity using the live price already in the portfolio context, rather than asking the user to do the math
 - Manage the watchlist proactively
 - Be concise and data-driven in responses
 - Always respond with valid structured JSON
@@ -368,6 +375,7 @@ The frontend is a single-page application with a dense, terminal-inspired layout
 - Price flash effect: on receiving a new price, briefly apply a CSS class with background color transition, then remove it
 - All API calls go to the same origin (`/api/*`) — no CORS configuration needed
 - Tailwind CSS for styling with a custom dark theme
+- Watchlist sparklines are frontend-only, in-memory accumulation from the SSE stream (§2) — this is intentional, not a gap. There is no backend price-history endpoint for them, and none should be added; the only persisted history is `portfolio_snapshots`, used for the P&L chart
 
 ---
 
@@ -453,4 +461,23 @@ The container is designed to deploy to AWS App Runner, Render, or any container 
 - Sell shares: cash increases, position updates or disappears
 - Portfolio visualization: heatmap renders with correct colors, P&L chart has data points
 - AI chat (mocked): send a message, receive a response, trade execution appears inline
-- SSE resilience: disconnect and verify reconnection
+- SSE resilience: restart the app container (or otherwise sever the connection at the network level) while a client is connected, then verify the header's connection-status dot cycles green → red/yellow → green and the client's `EventSource` reconnects and resumes price updates without a page reload
+
+## 13. Review Feedback
+
+The following are questions, clarifications, and simplification opportunities identified during a review of this plan. They are not requirements changes — just points worth resolving or considering before/while building.
+
+### Questions / Clarifications
+
+- **§7 `positions` uniqueness vs. fractional shares/averaging**: The `(user_id, ticker)` unique constraint implies buys accumulate into a single row via weighted-average cost. Worth stating that formula explicitly (e.g., `new_avg_cost = (old_qty * old_avg_cost + trade_qty * trade_price) / (old_qty + trade_qty)`) so the Backend agent doesn't have to infer it.
+- **§9 trade validation ordering when multiple trades are in one LLM response**: If the LLM proposes several trades in one `trades` array and an early one succeeds but a later one fails validation (e.g., insufficient cash after prior buys), is execution all-or-nothing or best-effort/partial? The plan says failures are reported back to the LLM in the response, but doesn't say whether prior trades in the same batch are rolled back.
+- **§6 "Tracked Ticker Universe" removal timing**: When a position is fully sold (quantity hits 0) and the ticker isn't on the watchlist, is it immediately removed from the market data source, or does it linger for the current price cache cycle? A one-line clarification would avoid ambiguity for the Backend/Market Data agents.
+- **§8 missing `GET /api/chat` (history) endpoint**: §9 describes loading "recent conversation history from the `chat_messages` table" for prompt construction, but there's no listed endpoint for the frontend to fetch/display past chat history on page load/refresh. Is chat history meant to be ephemeral per session (frontend-only state, lost on refresh), or should the frontend also load it from the DB on mount? If the latter, an endpoint should be added to §8.
+- **§11 Docker volume path vs. §4 directory structure**: §4 shows `db/` at the repo root as the mount target, and §11's example (`-v finally-data:/app/db`) uses a named volume, not a bind mount to `./db`. These are two different mechanisms (bind mount vs. named volume) — worth picking one and making the scripts (§11) and directory structure (§4) consistent, since a named volume won't show `finally.db` in the repo's `db/` folder at all.
+- **§6 correlation buckets**: "correlated moves across tickers (e.g., tech stocks move together)" — is the AAPL/GOOGL/MSFT/etc. sector bucketing something the Market Data agent should hardcode from a lookup table, or infer some other way? Since this is already built (per custom instructions, market data is complete/summarized in `MARKET_DATA_SUMMARY.md`), this is likely moot, but if the section is ever revisited it might be worth cross-referencing that summary doc instead of re-describing the design here.
+
+### Simplification Opportunities
+
+- **§9 step 8**: "Returns the complete JSON response to the frontend" — since actions are already executed server-side and persisted, the frontend response could be trimmed to just `{message, trades_executed, watchlist_changes}` rather than re-deriving anything; this is likely already the intent, just worth confirming the response shape matches the request schema 1:1 to avoid a frontend translation layer.
+- **§7 `portfolio_snapshots` cadence**: Recording every 30 seconds *and* after every trade could produce redundant rows in bursts of trading activity (e.g., 3 trades in 2 seconds = 3 snapshots + the next 30s tick). Not a real problem given SQLite's low overhead, but if the P&L chart ever needs downsampling, it's worth knowing duplicate near-identical timestamps are expected/acceptable rather than a bug.
+- **Cross-referencing the market data summary**: Since market data is already implemented and documented in `planning/MARKET_DATA_SUMMARY.md`, §6 of this plan could be shortened to a brief pointer + only the parts still relevant to downstream agents (e.g., the interface contract, tracked-ticker-universe semantics), reducing duplication risk if the implementation summary and this plan ever drift apart.
