@@ -1,4 +1,17 @@
+
+
+
+
+
 {
+
+"enabledPlugins": {
+    "frontend-design@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true
+  },
+  
+  "env" :{ "CLAUDE_CODE_EXPERTHENTAL_AGENT_TEAMS": "1"},
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true,

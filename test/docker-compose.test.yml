@@ -1,0 +1,37 @@
+# E2E stack: the production image (LLM_MOCK=true, throwaway DB) + a Playwright runner.
+# Run from the repo root:
+#   docker compose -f test/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from playwright
+#   docker compose -f test/docker-compose.test.yml down -v
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      LLM_MOCK: "true"
+      MASSIVE_API_KEY: ""
+      OPENROUTER_API_KEY: "not-needed-in-mock-mode"
+      DB_PATH: /app/db/finally.db
+    # tmpfs => every run starts from a fresh, freshly seeded database
+    tmpfs:
+      - /app/db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=3).status == 200 else 1)"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.49.1-jammy
+    depends_on:
+      app:
+        condition: service_healthy
+    working_dir: /e2e
+    environment:
+      BASE_URL: http://app:8000
+      CI: "true"
+    volumes:
+      - ./:/e2e
+      - /e2e/node_modules
+    ipc: host
+    command: ["bash", "-c", "npm install --no-audit --no-fund && npx playwright test"]

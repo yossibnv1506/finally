@@ -1,0 +1,36 @@
+# VCS / tooling
+.git
+.github
+.claude
+.claude-plugin
+independent-reviewer
+planning
+test
+scripts
+
+# Secrets — passed at runtime via --env-file
+.env
+.env.*
+!.env.example
+
+# Node / Next.js
+**/node_modules
+**/.next
+**/out
+frontend/coverage
+
+# Python
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+backend/static
+
+# Runtime data
+db/*.db
+db/*.db-*
+**/*.log
